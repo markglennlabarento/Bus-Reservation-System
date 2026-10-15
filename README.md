@@ -54,7 +54,7 @@ build/
 Run these commands from the project directory:
 
 ```powershell
-g++ -std=c++17 -Wall -Wextra -Wpedantic -Iinclude src\Bus.cpp src\Passenger.cpp src\Trip.cpp src\Reservation.cpp src\main.cpp -o build\bus_reservation_demo.exe
+g++ -std=c++17 -Wall -Wextra -Wpedantic -static-libgcc -static-libstdc++ -Iinclude src\Bus.cpp src\Passenger.cpp src\Trip.cpp src\Reservation.cpp src\main.cpp -o build\bus_reservation_demo.exe
 .\build\bus_reservation_demo.exe
 ```
 
@@ -76,4 +76,6 @@ When booking, enter an existing trip ID, a seat number within the bus capacity, 
 
 ## Data storage
 
-Data is stored in memory only. Buses, trips, and reservations added or changed during a run are not saved when the program exits.
+Buses, trips, and reservations are saved to `bus_reservation_data.txt` in the program's current working directory. The application loads this file when it starts and saves each successful booking, cancellation, bus addition, and trip addition immediately. It also saves once more when exiting normally.
+
+The first run creates the data file with the sample bus and trip. Keep the data file to preserve your records; deleting it resets the application to the sample data on the next run. The data file uses a quoted, versioned text format and can be moved or backed up while the application is closed.

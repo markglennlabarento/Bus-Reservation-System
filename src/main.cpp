@@ -3,7 +3,11 @@
 #include "../include/Reservation.h"
 #include "../include/Trip.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -40,12 +44,11 @@ bool readNumber(const std::string& prompt, std::uint32_t& value) {
 
 class ReservationSystem {
 public:
-    ReservationSystem() {
-        buses_.emplace_back("B-1", "Metro Express", 40);
-        trips_.emplace_back("T-1", "B-1", "Manila", "Cebu", "2026-10-20 08:30", 1850);
-    }
-
     int run() {
+        if (!loadData()) {
+            return 1;
+        }
+
         std::cout << "=== Bus Reservation System ===\n";
         while (true) {
             printMenu();
@@ -53,7 +56,7 @@ public:
             if (!readNumber("Select an option: ", choice)) {
                 if (!std::cin) {
                     std::cout << "\nInput ended. Exiting.\n";
-                    return 0;
+                    return saveData() ? 0 : 1;
                 }
                 continue;
             }
@@ -78,6 +81,10 @@ public:
                     addTrip();
                     break;
                 case 0:
+                    if (!saveData()) {
+                        std::cerr << "Could not save application data. The program will remain open so you can retry.\n";
+                        break;
+                    }
                     std::cout << "Thank you for using the Bus Reservation System.\n";
                     return 0;
                 default:
@@ -93,6 +100,173 @@ private:
     std::uint32_t nextBusId_ = 2;
     std::uint32_t nextTripId_ = 2;
     std::uint32_t nextReservationId_ = 1;
+    const std::string dataFileName_ = "bus_reservation_data.txt";
+
+    bool loadData() {
+        std::ifstream input(dataFileName_);
+        if (!input) {
+            if (std::filesystem::exists(dataFileName_)) {
+                std::cerr << "Could not open data file for reading: " << dataFileName_ << '\n';
+                return false;
+            }
+
+            buses_.emplace_back("B-1", "Metro Express", 40);
+            trips_.emplace_back("T-1", "B-1", "Manila", "Cebu", "2026-10-20 08:30", 1850);
+            return saveData();
+        }
+
+        std::string fileHeader;
+        unsigned int fileVersion = 0;
+        if (!(input >> fileHeader >> fileVersion) ||
+            fileHeader != "BUS_RESERVATION_DATA" || fileVersion != 1) {
+            std::cerr << "The data file has an invalid or unsupported format: " << dataFileName_ << '\n';
+            return false;
+        }
+
+        std::vector<Bus> loadedBuses;
+        std::vector<Trip> loadedTrips;
+        std::vector<Reservation> loadedReservations;
+        std::string recordType;
+        while (input >> recordType) {
+            if (recordType == "BUS") {
+                std::string id;
+                std::string name;
+                std::uint32_t capacity = 0;
+                if (!(input >> std::quoted(id) >> std::quoted(name) >> capacity) ||
+                    id.empty() || name.empty() || capacity == 0) {
+                    std::cerr << "Invalid bus record in " << dataFileName_ << '\n';
+                    return false;
+                }
+                loadedBuses.emplace_back(id, name, capacity);
+            } else if (recordType == "TRIP") {
+                std::string id;
+                std::string busId;
+                std::string origin;
+                std::string destination;
+                std::string departure;
+                std::uint32_t fare = 0;
+                if (!(input >> std::quoted(id) >> std::quoted(busId) >> std::quoted(origin) >>
+                      std::quoted(destination) >> std::quoted(departure) >> fare) ||
+                    id.empty() || busId.empty() || origin.empty() || destination.empty() || departure.empty()) {
+                    std::cerr << "Invalid trip record in " << dataFileName_ << '\n';
+                    return false;
+                }
+                loadedTrips.emplace_back(id, busId, origin, destination, departure, fare);
+            } else if (recordType == "RESERVATION") {
+                std::string id;
+                std::string tripId;
+                std::uint32_t seat = 0;
+                unsigned int statusValue = 0;
+                std::string passengerName;
+                std::string passengerContact;
+                if (!(input >> std::quoted(id) >> std::quoted(tripId) >> seat >> statusValue >>
+                      std::quoted(passengerName) >> std::quoted(passengerContact)) ||
+                    id.empty() || tripId.empty() || seat == 0 || passengerName.empty() ||
+                    passengerContact.empty() || statusValue > 1) {
+                    std::cerr << "Invalid reservation record in " << dataFileName_ << '\n';
+                    return false;
+                }
+                const ReservationStatus status = statusValue == 0
+                    ? ReservationStatus::Active
+                    : ReservationStatus::Cancelled;
+                loadedReservations.emplace_back(
+                    id, tripId, seat, Passenger{passengerName, passengerContact}, status);
+            } else {
+                std::cerr << "Unknown record '" << recordType << "' in " << dataFileName_ << '\n';
+                return false;
+            }
+        }
+        if (!input.eof()) {
+            std::cerr << "Error while reading data file: " << dataFileName_ << '\n';
+            return false;
+        }
+
+        for (const Trip& trip : loadedTrips) {
+            if (std::none_of(loadedBuses.begin(), loadedBuses.end(), [&trip](const Bus& bus) {
+                    return bus.getId() == trip.getBusId();
+                })) {
+                std::cerr << "Trip '" << trip.getId() << "' references a missing bus in "
+                          << dataFileName_ << '\n';
+                return false;
+            }
+        }
+        for (const Reservation& reservation : loadedReservations) {
+            const auto trip = std::find_if(loadedTrips.begin(), loadedTrips.end(),
+                [&reservation](const Trip& candidate) {
+                    return candidate.getId() == reservation.getTripId();
+                });
+            if (trip == loadedTrips.end()) {
+                std::cerr << "Reservation '" << reservation.getId() << "' references a missing trip in "
+                          << dataFileName_ << '\n';
+                return false;
+            }
+            const auto bus = std::find_if(loadedBuses.begin(), loadedBuses.end(),
+                [&trip](const Bus& candidate) {
+                    return candidate.getId() == trip->getBusId();
+                });
+            if (bus == loadedBuses.end() || reservation.getSeatNumber() > bus->getSeatCapacity()) {
+                std::cerr << "Reservation '" << reservation.getId() << "' has an invalid seat in "
+                          << dataFileName_ << '\n';
+                return false;
+            }
+        }
+
+        buses_ = std::move(loadedBuses);
+        trips_ = std::move(loadedTrips);
+        reservations_ = std::move(loadedReservations);
+        nextBusId_ = static_cast<std::uint32_t>(buses_.size()) + 1;
+        nextTripId_ = static_cast<std::uint32_t>(trips_.size()) + 1;
+        nextReservationId_ = static_cast<std::uint32_t>(reservations_.size()) + 1;
+        return true;
+    }
+
+    bool saveData() const {
+        std::ofstream output(dataFileName_, std::ios::trunc);
+        if (!output) {
+            std::cerr << "Could not open data file for writing: " << dataFileName_ << '\n';
+            return false;
+        }
+
+        output << "BUS_RESERVATION_DATA 1\n";
+        for (const Bus& bus : buses_) {
+            output << "BUS " << std::quoted(bus.getId()) << ' '
+                   << std::quoted(bus.getName()) << ' ' << bus.getSeatCapacity() << '\n';
+        }
+        for (const Trip& trip : trips_) {
+            output << "TRIP " << std::quoted(trip.getId()) << ' '
+                   << std::quoted(trip.getBusId()) << ' '
+                   << std::quoted(trip.getOrigin()) << ' '
+                   << std::quoted(trip.getDestination()) << ' '
+                   << std::quoted(trip.getDepartureDateTime()) << ' '
+                   << trip.getFareInCents() << '\n';
+        }
+        for (const Reservation& reservation : reservations_) {
+            const Passenger passenger = reservation.getPassenger();
+            const unsigned int statusValue =
+                reservation.getStatus() == ReservationStatus::Active ? 0 : 1;
+            output << "RESERVATION " << std::quoted(reservation.getId()) << ' '
+                   << std::quoted(reservation.getTripId()) << ' '
+                   << reservation.getSeatNumber() << ' ' << statusValue << ' '
+                   << std::quoted(passenger.getName()) << ' '
+                   << std::quoted(passenger.getContact()) << '\n';
+        }
+        output.flush();
+        if (!output) {
+            std::cerr << "Failed while writing data file: " << dataFileName_ << '\n';
+            return false;
+        }
+        return true;
+    }
+
+    bool saveOrRollback(const std::string& failureMessage,
+                        const std::function<void()>& rollback) {
+        if (saveData()) {
+            return true;
+        }
+        rollback();
+        std::cout << failureMessage << " The change was not kept.\n";
+        return false;
+    }
 
     static void printMenu() {
         std::cout << "\n1. View trips\n"
@@ -239,6 +413,13 @@ private:
         const Passenger passenger{name, contact};
         const std::string reservationId = "R-" + std::to_string(nextReservationId_++);
         reservations_.emplace_back(reservationId, tripId, seatNumber, passenger);
+        if (!saveOrRollback("Booking could not be saved.",
+                            [this]() {
+                                reservations_.pop_back();
+                                --nextReservationId_;
+                            })) {
+            return;
+        }
         std::cout << "Booking confirmed: " << reservations_.back().summary() << '\n';
     }
 
@@ -285,6 +466,10 @@ private:
         }
 
         reservation->cancel();
+        if (!saveOrRollback("Cancellation could not be saved.",
+                            [reservation]() { reservation->setStatus(ReservationStatus::Active); })) {
+            return;
+        }
         std::cout << "Reservation " << reservationId << " cancelled.\n";
     }
 
@@ -307,6 +492,13 @@ private:
 
         const std::string busId = "B-" + std::to_string(nextBusId_++);
         buses_.emplace_back(busId, name, capacity);
+        if (!saveOrRollback("Bus could not be saved.",
+                            [this]() {
+                                buses_.pop_back();
+                                --nextBusId_;
+                            })) {
+            return;
+        }
         std::cout << "Bus added: " << buses_.back().summary() << '\n';
     }
 
@@ -349,6 +541,13 @@ private:
 
         const std::string tripId = "T-" + std::to_string(nextTripId_++);
         trips_.emplace_back(tripId, busId, origin, destination, departure, fare);
+        if (!saveOrRollback("Trip could not be saved.",
+                            [this]() {
+                                trips_.pop_back();
+                                --nextTripId_;
+                            })) {
+            return;
+        }
         std::cout << "Trip added: " << trips_.back().summary() << '\n';
     }
 };
