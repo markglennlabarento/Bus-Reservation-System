@@ -1,0 +1,52 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build C++ Project",
+      "type": "shell",
+      "command": "g++",
+      "args": [
+        "-std=c++17",
+        "-I${workspaceFolder}/include",
+        "${workspaceFolder}/src/Bus.cpp",
+        "${workspaceFolder}/src/Passenger.cpp",
+        "${workspaceFolder}/src/Trip.cpp",
+        "${workspaceFolder}/src/Reservation.cpp",
+        "${workspaceFolder}/src/main.cpp",
+        "-o",
+        "${workspaceFolder}/build/bus_reservation_demo"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$gcc",
+      "detail": "Compiles the bus reservation system using g++.",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "Run C++ Program",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/bus_reservation_demo",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": [
+        "Build C++ Project"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    }
+  ]
+}
